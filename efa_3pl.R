@@ -22,7 +22,7 @@
 ##### n: the number of iterations
 ##### rk: factor loadings after the transformation, a J by K matrix
 ##### Q_mat: Q-matrix to indicate the loading structure,  a J by K matrix
-##### GIC: numerical value of GIC
+##### GIC,AIC,BIC : model fit index
 ##################################################
 
 library(Rcpp)
@@ -245,12 +245,16 @@ sgvem_3PLEFA <- function(u,domain, samp,forgetrate,mu_b,sigma2_b,Alpha,Beta,upda
   r[r>0.9]=0.9
   r[r<0]=abs(r[r<0][1])
   new_a=t(rep(1,domain)%o%(r/sqrt(1-r^2)))
-  new_b=-qnorm(colSums(u)/person,0,1)/r
+  new_a=replace(new_a,new_a>4,4)
+  new_b=-qnorm(colSums(u,na.rm=T)/person,0,1)/r
+  new_b[new_b>4]=4
+  new_b[new_b<(-4)]=-4
   new_c=rep(0.1,item)
   theta=matrix(rnorm(person*domain,0,1),nrow=person)
   #person*item
   xi=array(1,person)%*%t(new_b)-theta%*%t(new_a)
   eta=(exp(xi)/(1+exp(xi))-0.5)/(2*xi)
+  eta[is.na(u)]=NA
   new_s=matrix(NA,nrow=person,ncol=item)
   for (i in 1:person) {
     for (j in 1:item) {
@@ -364,7 +368,11 @@ sgvem_3PLEFA <- function(u,domain, samp,forgetrate,mu_b,sigma2_b,Alpha,Beta,upda
   #gic
   lbound=lb3pl(u,xi,new_s,person,new_a, new_c, Sigma, new_b, SIGMA, MU,Alpha, Beta, mu_b, sigma2_b)
   gic=log(log(person))*log(person)*sum(Q_mat+item) - 2*lbound
+  #AIC, BIC
+  bic = log(person)*sum(Q_mat+item) - 2*lbound
+  aic = 2*sum(Q_mat+item) -2*lbound
   return(list(ra=new_a,rb=new_b,rc=new_c,rs = new_s,
               reta = eta,reps=xi,rsigma = Sigma,mu_i = MU,
-              sig_i = SIGMA,n=n,Q_mat=Q_mat,GIC=gic,rk=rk))
+              sig_i = SIGMA,n=n,Q_mat=Q_mat,GIC=gic,rk=rk,AIC=aic,
+              BIC=bic))
 }

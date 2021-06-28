@@ -6,8 +6,9 @@
 # domain: K, numerical value of number of latent dimension
 # indic: factor loading indicator matrix, a J by K numerical matrix, 
 #       reflecting each item loads on which domain
+# gamma: numerical value of adaptive lasso parameter
 #################################################
-##### Outputs a list of initialized parameters                                                             
+##### Outputs a list of updated parameters                                                             
 ##### ra: item discrimination parameters, a J by K matrix                                                           
 ##### rb: item difficulty parameters, vector of length J
 ##### reta: variational parameters(\eta(\xi) in the paper), a N by J matrix  
@@ -17,7 +18,7 @@
 ##### sig_i: covariance matrix for each person, a K by K by N array
 ##### n: the number of iterations
 ##### Q_mat: Q-matrix to indicate the loading structure,  a J by K matrix
-##### GIC: numerical value of GIC
+##### GIC,AIC,BIC : model fit index
 ##### lbd: numerical value of penalty parameter lambda
 ##### id: numerical value of the position of lambda  
 ##################################################
@@ -27,14 +28,14 @@ library(psych)
 library(gtools)
 source("cfa_2pl.r")
 
-#update non-penalty a
-na_al2pl<-'
+#update a without penalty
+na_lc12pl<-'
 // [[Rcpp::depends(RcppArmadillo)]]
 #include <RcppArmadillo.h>
 using namespace Rcpp;
 using namespace arma;
 // [[Rcpp::export]]
-arma::mat naal2pl(const arma::mat&u,const arma::mat&indic,const arma::vec& nopenalty_col,
+arma::mat nalc12pl(const arma::mat&u,const arma::mat&indic,const arma::vec& nopenalty_col,
 const int& person, const arma::mat& eta,const arma::vec& new_b,const arma::cube& SIGMA, const arma::mat& MU){
 int item=indic.n_rows;
 int domain=indic.n_cols;
@@ -60,7 +61,7 @@ new_a.submat(id,iind)=trans(solve(a_de,eye(iind.n_elem,iind.n_elem))*a_nu/2);
 return new_a;
 }
 '
-sourceCpp(code=na_al2pl)
+sourceCpp(code=na_lc12pl)
 
 #update penalty a
 pa_al2pl<-'
@@ -142,7 +143,7 @@ vem_2PLEFA_adaptive_const1 <- function(u,new_a,new_b,eta,xi,Sigma, domain,lbd,in
     
     par_a=new_a
     #update a
-    new_a1=naal2pl(u, indic, nopenalty_col, person, eta, new_b, SIGMA, MU)
+    new_a1=nalc12pl(u, indic, nopenalty_col, person, eta, new_b, SIGMA, MU)
     new_a1[-nopenalty_col,]=new_a[-nopenalty_col,]
     #adaptive lasso penalty
     sdf=setdiff(1:item,nopenalty_col)
@@ -167,8 +168,7 @@ vem_2PLEFA_adaptive_const1 <- function(u,new_a,new_b,eta,xi,Sigma, domain,lbd,in
 }
 
 #main function: choose optimal lambda
-vem_2PLEFA_adaptive_const1_all<-function(u,domain,indic,updateProgress=NULL){
-  gamma=2
+vem_2PLEFA_adaptive_const1_all<-function(u,domain,indic,gamma,updateProgress=NULL){
   lbd=seq(2,20,2)
   nopenalty_col=which(rowSums(indic)==1)
   person=dim(u)[1]

@@ -7,7 +7,7 @@
 # indic: factor loading indicator matrix, a J by K numerical matrix, 
 #       reflecting each item loads on which domain
 #################################################
-##### Outputs a list of initialized parameters                                                             
+##### Outputs a list of updated parameters                                                             
 ##### ra: item discrimination parameters, a J by K matrix                                                           
 ##### rb: item difficulty parameters, vector of length J
 ##### reta: variational parameters(\eta(\xi) in the paper), a N by J matrix  
@@ -17,7 +17,7 @@
 ##### sig_i: covariance matrix for each person, a K by K by N array
 ##### n: the number of iterations
 ##### Q_mat: Q-matrix to indicate the loading structure,  a J by K matrix
-##### GIC: numerical value of GIC
+##### GIC,AIC,BIC : model fit index
 ##################################################
 library(Rcpp)
 library(Matrix)
@@ -38,8 +38,11 @@ arma::mat Spart=mat(domain,domain,fill::zeros);
 arma::mat xi=mat(person,item,fill::zeros);
 for(int i=0; i<person; ++i){
 arma::mat sigma_part=arma::mat(domain,domain,arma::fill::zeros);
+//mu_part.zeros();
 arma::vec mu_part= arma::zeros(domain);
 for(int j=0; j<item; ++j){
+if(NumericVector::is_na(eta(i,j))){
+continue;}
 sigma_part=sigma_part+eta(i,j)*trans(new_a.row(j))*new_a.row(j);
 mu_part=mu_part+trans((2*eta(i,j)*new_b(j)+u(i,j)-0.5)*new_a.row(j));
 }
@@ -51,8 +54,8 @@ arma::mat apro=new_a*(sigmahat+muhat*trans(muhat))*trans(new_a);
 xi.row(i)=trans(sqrt(square(new_b)-2*new_b%(new_a*muhat)+apro.diag()));
 Spart=Spart+sigmahat+muhat*trans(muhat);
 }
-return List::create(Named("SIGMA") = SIGMA,
-Named("MU") = MU,Named("xi") = xi,Named("Spart") = Spart);
+return List::create(Named("Spart") = Spart,Named("SIGMA") = SIGMA,
+Named("MU") = MU,Named("xi") = xi);
 }
 '
 sourceCpp(code=e_cfa2pl)
@@ -66,8 +69,8 @@ using namespace arma;
 // [[Rcpp::export]]
 arma::mat acfa2(const arma::mat&u,const arma::mat&indic,const int& person, 
 const int& item, const int& domain, const arma::mat& eta,
-const arma::vec& new_b,const arma::cube& SIGMA, const arma::mat& MU){
-arma::mat new_a=mat(item,domain,fill::zeros);
+const arma::vec& new_b,const arma::cube& SIGMA, const arma::mat& MU,const arma::mat& new_a1){
+arma::mat new_a=new_a1;
 for(int j=0; j<item; ++j){
 arma::rowvec Ind=indic.row(j);
 arma::uvec iind=find(Ind==1);
@@ -79,11 +82,14 @@ arma::mat sigma=SIGMA.slice(i);
 sigma=sigma.submat(iind,iind);
 arma::vec mu=MU.col(i);
 mu=mu.elem(iind);
+if(NumericVector::is_na(eta(i,j))){
+continue;}
 a_de=a_de+eta(i,j)*sigma+eta(i,j)*(mu*trans(mu));
 a_nu=a_nu+(u(i,j)-0.5+2*new_b(j)*eta(i,j))*mu;
 }
 arma::uvec id(1);
 id.at(0)=j;
+//new_a.submat(id,iind)=trans(inv(a_de)*a_nu/2);
 new_a.submat(id,iind)=trans(solve(a_de,eye(di,di))*a_nu/2);
 }
 return new_a;
@@ -109,6 +115,8 @@ double sum = 0;
 double sum2 = 0;
 for(int i=0; i<person; ++i){
 for(int j=0; j<item; ++j){
+if(NumericVector::is_na(eta(i,j))){
+continue;}
 sum = sum + log(exp(xi(i,j))/(1+exp(xi(i,j))))+(0.5-u(i,j))*new_b(j)+(u(i,j)-0.5)*as_scalar(new_a.row(j)*MU.col(i));
 sum = sum - 0.5*xi(i,j);
 double apro=as_scalar(new_a.row(j)*(SIGMA.slice(i)+MU.col(i)*trans(MU.col(i)))*trans(new_a.row(j)));
@@ -147,6 +155,7 @@ vem_2PLCFA <- function(u,domain, indic,updateProgress=NULL) {
     #update MU, SIGMA, sigma, eta
     rs1<-ecfa2(u,Sigma,domain, person, item, eta, new_a, new_b)
     xi=rs1$xi
+    xi[is.na(u)]=NA
     Spart=rs1$Spart
     SIGMA=rs1$SIGMA
     MU=rs1$MU
@@ -159,10 +168,10 @@ vem_2PLCFA <- function(u,domain, indic,updateProgress=NULL) {
     #update b
     par_b=new_b
     b_part = t(new_a%*%MU)
-    new_b=colSums(0.5-u+2*eta*b_part)/colSums(2*eta)
+    new_b=colSums(0.5-u+2*eta*b_part,na.rm = T)/colSums(2*eta,na.rm = T)
     par_a=new_a
     #update a
-    new_a=acfa2(u, indic, person, item, domain, eta, new_b, SIGMA, MU)
+    new_a=acfa2(u, indic, person, item, domain, eta, new_b, SIGMA, MU,new_a)
     if (norm(as.vector(new_a)-as.vector(par_a),type="2")+norm(new_b-par_b,type="2")+
         norm(as.vector(Sigma)-as.vector(par_Sigma),type="2") <0.0001){
       converge=1
@@ -180,6 +189,10 @@ vem_2PLCFA <- function(u,domain, indic,updateProgress=NULL) {
   #gic
   lbound=lb2pl(u,xi,Sigma,new_a,new_b,SIGMA,MU)
   gic=log(log(person))*log(person)*sum(Q_mat+item) - 2*lbound
+  #AIC, BIC
+  bic = log(person)*sum(Q_mat+item) - 2*lbound
+  aic = 2*sum(Q_mat+item) -2*lbound
   return(list(ra=new_a,rb=new_b,reta = eta,reps=xi,rsigma = Sigma,
-              mu_i = MU,sig_i = SIGMA,n=n,Q_mat=Q_mat,GIC=gic))
+              mu_i = MU,sig_i = SIGMA,n=n,Q_mat=Q_mat,GIC=gic,AIC=aic,
+              BIC=bic))
 }

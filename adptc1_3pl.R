@@ -10,8 +10,9 @@
 # forgetrate: forget rate for the stochastic algorithm
 # mu_b, sigma2_b: the mean and variance parameters, prior distribution of b parameters
 # Alpha, Beta: the alpha and beta parameters, prior distribution of g parameters
+# gamma: numerical value of adaptive lasso parameter
 #################################################
-##### Outputs a list of initialized parameters                                                             
+##### Outputs a list of updated parameters                                                             
 ##### ra: item discrimination parameters, a J by K matrix                                                           
 ##### rb: item difficulty parameters, vector of length J
 ##### rc: item guessing parameters, vector of length J
@@ -23,7 +24,7 @@
 ##### sig_i: covariance matrix for each person, a K by K by N array
 ##### n: the number of iterations
 ##### Q_mat: Q-matrix to indicate the loading structure,  a J by K matrix
-##### GIC: numerical value of GIC
+##### GIC,AIC,BIC : model fit index
 ##### lbd: numerical value of penalty parameter lambda
 ##### id: numerical value of the position of lambda
 ##################################################
@@ -35,47 +36,48 @@ library(gtools)
 source("cfa_3pl.r")
 
 #update non-penalty a
-na_al3pl<-'
+na_lc13pl<-'
 // [[Rcpp::depends(RcppArmadillo)]]
 #include <RcppArmadillo.h>
 using namespace Rcpp;
 using namespace arma;
 // [[Rcpp::export]]
-List naal3pl(const arma::mat&u,const arma::mat&indic,const arma::mat& eta,const arma::mat& s,
+List nalc13pl(const arma::mat&u,const arma::mat&indic,const arma::vec& nopenalty_col,const arma::mat& eta,const arma::mat& s,
 const arma::vec& new_b,const arma::cube& SIGMA, const arma::mat& MU,
-const arma::mat& a,const arma::vec& id_1,arma::mat& prev_a_num,const arma::cube& prev_a_denom, 
+const arma::mat& a,const arma::vec& id_1,const arma::mat& prev_a_num,const arma::cube& prev_a_denom, 
 const double& dec_st){
 int domain=indic.n_cols;
-int item=indic.n_rows;
+int item=u.n_cols;
 arma::mat new_a=a;
 arma::mat a_num=mat(domain,item,fill::zeros);
 arma::cube a_denom=zeros(domain,domain,item);
-for(int j=0; j<domain; ++j){
-arma::rowvec Ind=indic.row(j);
+for(int j=0; j<nopenalty_col.n_elem; ++j){
+int k=nopenalty_col(j)-1;
+arma::rowvec Ind=indic.row(k);
 arma::uvec iind=find(Ind==1);
 arma::mat a_denom_sub=a_denom.slice(j);
 arma::uvec id2(1);
-id2(0)=j;
+id2(0)=k;
 for(int i=0; i<id_1.n_elem; ++i){
 int l=id_1(i)-1;
-double a1=1-u(l,j)+s(l,j)*u(l,j);
+double a1=1-u(l,k)+s(l,j)*u(l,k);
 arma::mat sigma=SIGMA.slice(l);
 arma::uvec id(1);
 id(0)=l;
 arma::mat a2=sigma.submat(iind,iind)+MU.submat(iind,id)*trans(MU.submat(iind,id));
-a_denom_sub.submat(iind,iind)=a_denom_sub.submat(iind,iind)+a1*eta(l,j)*a2;
-a_num.submat(iind,id2)=a_num.submat(iind,id2)+a1*(u(l,j)-0.5+2*new_b(j)*eta(l,j))*MU(iind,id);  
+a_denom_sub.submat(iind,iind)=a_denom_sub.submat(iind,iind)+a1*eta(l,k)*a2;
+a_num.submat(iind,id2)=a_num.submat(iind,id2)+a1*(u(l,k)-0.5+2*new_b(k)*eta(l,k))*MU(iind,id);  
 }
-arma::mat prev_a_denom_sub=prev_a_denom.slice(j);
+arma::mat prev_a_denom_sub=prev_a_denom.slice(k);
 arma::mat a3=dec_st*a_denom_sub.submat(iind,iind) + (1-dec_st)*prev_a_denom_sub.submat(iind,iind);
 arma::mat a4=(dec_st*a_num.submat(iind,id2)+(1-dec_st)*prev_a_num.submat(iind,id2))/2;
 new_a.submat(id2,iind)=trans(solve(a3,eye(iind.n_elem,iind.n_elem))*a4);
-a_denom.slice(j)=a_denom_sub;
+a_denom.slice(k)=a_denom_sub;
 }
 return List::create(Named("new_a") = new_a,Named("a_denom") = a_denom,Named("a_num") = a_num);
 }
 '
-sourceCpp(code=na_al3pl)
+sourceCpp(code=na_lc13pl)
 
 #update penalty a
 pa_al3pl<-'
@@ -86,11 +88,13 @@ using namespace arma;
 // [[Rcpp::export]]
 List paal3pl(const arma::mat&u,const int& domain,const int& item,const arma::vec& id_1,const double& lbd, 
 const arma::mat& eta,const arma::mat& s,const arma::mat& a,const arma::vec& new_b,const arma::cube& SIGMA, 
-const arma::mat& MU,const double& dec_st,const arma::mat& prev_delta,const arma::mat& prev_deriv2,const arma::mat& weights){
+const arma::mat& MU,const double& dec_st,const arma::mat& prev_delta,const arma::mat& prev_deriv2,
+const arma::mat& weights,const arma::vec& sdf){
 arma::mat new_a=a;
-arma::mat delta=mat(item-domain,domain,fill::zeros);
-arma::mat deriv2=mat(item-domain,domain,fill::zeros);
-for(int j=domain; j<item; ++j){
+arma::mat delta=mat(item,domain,fill::zeros);
+arma::mat deriv2=mat(item,domain,fill::zeros);
+for(int n=0; n<sdf.n_elem; ++n){
+int j=sdf(n)-1;
 for(int k=0; k<domain; ++k){
 for(int i=0; i<id_1.n_elem; ++i){
 int l=id_1(i)-1;
@@ -105,13 +109,13 @@ arma::uvec id(1);
 id.at(0)=j;
 arma::uvec id2(1);
 id2.at(0)=k;
-delta(j-domain,k) = delta(j-domain,k) + a1*((u(l,j)-0.5)*mu(k)+2*new_b(j)*eta(l,j)*mu(k)-2*eta(l,j)*dot(trans(new_a.submat(id,ex_k)),sigmumu.submat(ex_k,id2)));
-deriv2(j-domain,k) = deriv2(j-domain,k) + a1*2*eta(l,j)*sigmumu(k,k);
+delta(j,k) = delta(j,k) + a1*((u(l,j)-0.5)*mu(k)+2*new_b(j)*eta(l,j)*mu(k)-2*eta(l,j)*dot(trans(new_a.submat(id,ex_k)),sigmumu.submat(ex_k,id2)));
+deriv2(j,k) = deriv2(j,k) + a1*2*eta(l,j)*sigmumu(k,k);
 }
-double avg_delta = dec_st*delta(j-domain,k) + (1-dec_st)*prev_delta(j-domain,k);
+double avg_delta = dec_st*delta(j,k) + (1-dec_st)*prev_delta(j,k);
 if(abs(avg_delta)>lbd*(1/weights(j,k))){
 double S=sign(avg_delta)*(abs(avg_delta) - lbd*(1/weights(j,k)));
-new_a(j,k) = S/(dec_st*deriv2(j-domain,k) + (1-dec_st)*prev_deriv2(j-domain,k));
+new_a(j,k) = S/(dec_st*deriv2(j,k) + (1-dec_st)*prev_deriv2(j,k));
 }else{
 new_a(j,k) = 0;
 }
@@ -125,7 +129,7 @@ sourceCpp(code=pa_al3pl)
 
 #adaptive lasso with constraint 1 function
 sgvem_3PLEFA_adapt_const1 <- function(u,new_a,new_b,new_c,new_s,eta,xi,Sigma,inite,samp,forgetrate,domain,lbd,indic,
-                                      mu_b,sigma2_b,Alpha,Beta,weights,updateProgress=NULL) {
+                                      mu_b,sigma2_b,Alpha,Beta,weights,nopenalty_col,updateProgress=NULL) {
   person=dim(u)[1]
   item=dim(u)[2]
   converge = 1
@@ -145,8 +149,8 @@ sgvem_3PLEFA_adapt_const1 <- function(u,new_a,new_b,new_c,new_s,eta,xi,Sigma,ini
   #xi=eta
   prev_a_num = matrix(0,nrow=domain,ncol=item)  
   prev_a_denom = array(0,dim=c(domain,domain,item)) 
-  prev_delta = matrix(0,nrow=item - domain,ncol=domain)
-  prev_deriv2 = matrix(0,nrow=item - domain,ncol=domain);
+  prev_delta = matrix(0,nrow=item,ncol=domain)
+  prev_deriv2 = matrix(0,nrow=item,ncol=domain);
   prev_b_num = matrix(0,nrow=item,ncol=1)
   prev_b_denom = matrix(0,nrow=item,ncol=1)
   prev_c_num = matrix(0,nrow=item,ncol=1) 
@@ -200,13 +204,15 @@ sgvem_3PLEFA_adapt_const1 <- function(u,new_a,new_b,new_c,new_s,eta,xi,Sigma,ini
     par_a=new_a
     
     #update a
-    rs3=naal3pl(u, indic, eta, new_s, new_b, SIGMA, MU, new_a, id_1, prev_a_num, prev_a_denom, dec_st)
-    new_a=rs3$new_a
+    rs3=nalc13pl(u, indic, nopenalty_col, eta, new_s, new_b, SIGMA, MU, new_a, id_1, prev_a_num, prev_a_denom, dec_st)
+    new_a1=rs3$new_a
+    new_a1[-nopenalty_col,]=new_a[-nopenalty_col,]
     a_denom=rs3$a_denom
     a_num=rs3$a_num
-    
-    rs4=paal3pl(u,domain, item, id_1, lbd, eta, new_s, new_a, new_b, SIGMA, MU, dec_st, 
-             prev_delta, prev_deriv2,weights)
+    #L1-penalty
+    sdf=setdiff(1:item,nopenalty_col)
+    rs4=paal3pl(u,domain, item, id_1, lbd, eta, new_s, new_a1, new_b, SIGMA, MU, dec_st, 
+             prev_delta, prev_deriv2,weights,sdf)
     new_a=rs4$new_a
     delta=rs4$delta
     deriv2=rs4$deriv2
@@ -263,14 +269,20 @@ sgvem_3PLEFA_adapt_const1 <- function(u,new_a,new_b,new_c,new_s,eta,xi,Sigma,ini
   #new_a=replace(new_a,new_a< 0,0)
   new_a=replace(new_a,abs(new_a)< 0.001,0)
   Q_mat = (new_a != 0)*1
+  #gic
+  lbound=lb3pl(u,xi,new_s,c(1:person),new_a,new_c,Sigma, new_b, SIGMA, MU, 
+               Alpha, Beta, mu_b, sigma2_b)
+  gic=log(log(person))*log(person)*sum(Q_mat+item) - 2*lbound
+  #AIC, BIC
+  bic = log(person)*sum(Q_mat+item) - 2*lbound
+  aic = 2*sum(Q_mat+item) -2*lbound
   return(list(ra=new_a,rb=new_b,rc=new_c,rs = new_s,reta = eta,reps=xi,rsigma = Sigma,rs = new_s,
-              mu_i = MU,sig_i = SIGMA,n=n,Q_mat=Q_mat,n20=n20))
+              mu_i = MU,sig_i = SIGMA,n=n,Q_mat=Q_mat,n20=n20,GIC=gic,AIC=aic,BIC=bic))
 }
 
 
 #main function: choose optimal lambda
-sgvem_3PLEFA_adaptive_const1_all<-function(u,domain,indic,samp,forgetrate,mu_b,sigma2_b,Alpha,Beta,updateProgress=NULL){
-  gamma=2
+sgvem_3PLEFA_adaptive_const1_all<-function(u,domain,indic,samp,forgetrate,mu_b,sigma2_b,Alpha,Beta,gamma,updateProgress=NULL){
   inite=dim(u)[1]
   person=dim(u)[1]
   item=dim(u)[2]
@@ -308,7 +320,7 @@ sgvem_3PLEFA_adaptive_const1_all<-function(u,domain,indic,samp,forgetrate,mu_b,s
     }
     rl [[j]]=sgvem_3PLEFA_adapt_const1(u,new_a,new_b,new_c,new_s,eta,xi,Sigma,
                                        inite,samp,forgetrate,domain,lbd[j],indic,
-                                       mu_b,sigma2_b,Alpha,Beta,weights,updateProgress=NULL)
+                                       mu_b,sigma2_b,Alpha,Beta,weights,nopenalty_col,updateProgress=NULL)
     lbound=lb3pl(u,rl[[j]]$reps,rl[[j]]$rs,c(1:person),rl[[j]]$ra,rl[[j]]$rc,rl[[j]]$rsigma,
               rl[[j]]$rb,rl[[j]]$sig_i,rl[[j]]$mu_i,Alpha, Beta, mu_b, sigma2_b)
     gic[j]=log(log(person))*log(person)*sum(rl[[j]]$Q_mat+item) - 2*lbound
@@ -328,7 +340,7 @@ sgvem_3PLEFA_adaptive_const1_all<-function(u,domain,indic,samp,forgetrate,mu_b,s
     for(j in 1:length(lbd)){
       rl [[j]]=sgvem_3PLEFA_adapt_const1(u,new_a,new_b,new_c,new_s,eta,xi,Sigma,
                                          inite,samp,forgetrate,domain,lbd[j],indic,
-                                         mu_b,sigma2_b,Alpha,Beta,weights,updateProgress=NULL)
+                                         mu_b,sigma2_b,Alpha,Beta,weights,nopenalty_col,updateProgress=NULL)
       lbound=lb3pl(u,rl[[j]]$reps,rl[[j]]$rs,c(1:person),rl[[j]]$ra,rl[[j]]$rc,rl[[j]]$rsigma,
                    rl[[j]]$rb,rl[[j]]$sig_i,rl[[j]]$mu_i,Alpha, Beta, mu_b, sigma2_b)
       gic[j]=log(log(person))*log(person)*sum(rl[[j]]$Q_mat+item) - 2*lbound
@@ -346,7 +358,7 @@ sgvem_3PLEFA_adaptive_const1_all<-function(u,domain,indic,samp,forgetrate,mu_b,s
     for(j in 1:length(lbd)){
       rl [[j]]=sgvem_3PLEFA_adapt_const1(u,new_a,new_b,new_c,new_s,eta,xi,Sigma,
                                          inite,samp,forgetrate,domain,lbd[j],indic,
-                                         mu_b,sigma2_b,Alpha,Beta,weights,updateProgress=NULL)
+                                         mu_b,sigma2_b,Alpha,Beta,weights,nopenalty_col,updateProgress=NULL)
       lbound=lb3pl(u,rl[[j]]$reps,rl[[j]]$rs,c(1:person),rl[[j]]$ra,rl[[j]]$rc,rl[[j]]$rsigma,
                    rl[[j]]$rb,rl[[j]]$sig_i,rl[[j]]$mu_i,Alpha, Beta, mu_b, sigma2_b)
       gic[j]=log(log(person))*log(person)*sum(rl[[j]]$Q_mat+item) - 2*lbound

@@ -17,7 +17,7 @@
 ##### sig_i: covariance matrix for each person, a K by K by N array
 ##### n: the number of iterations
 ##### Q_mat: Q-matrix to indicate the loading structure,  a J by K matrix
-##### GIC: numerical value of GIC
+##### GIC,AIC,BIC : model fit index
 ##### lbd: numerical value of penalty parameter lambda
 ##### id: numerical value of the position of lambda  
 ##################################################
@@ -167,8 +167,15 @@ vem_2PLEFA_L1_const1 <- function(u,new_a,new_b,eta,xi,Sigma, domain,lbd,indic,no
   #new_a=replace(new_a,new_a< 0,0)
   new_a=replace(new_a,abs(new_a)< 0.001,0)
   Q_mat = (new_a != 0)*1
+  #gic
+  lbound=lb2pl(u,xi,Sigma,new_a,new_b,SIGMA,MU)
+  gic=log(log(person))*log(person)*sum(Q_mat+item) - 2*lbound
+  #AIC, BIC
+  bic = log(person)*sum(Q_mat+item) - 2*lbound
+  aic = 2*sum(Q_mat+item) -2*lbound
   return(list(ra=new_a,rb=new_b,reta = eta,reps=xi,rsigma = Sigma,mu_i = MU,sig_i = SIGMA,n=n,
-              Q_mat=Q_mat,is_singular=is_singular))
+              Q_mat=Q_mat,GIC=gic,AIC=aic,
+              BIC=bic))
 }
 
 #main function: choose optimal lambda

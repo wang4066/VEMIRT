@@ -23,12 +23,13 @@
 ##### sig_i: covariance matrix for each person, a K by K by N array
 ##### n: the number of iterations
 ##### Q_mat: Q-matrix to indicate the loading structure,  a J by K matrix
-##### GIC: numerical value of GIC
+##### GIC,AIC,BIC : model fit index
 ##################################################
 library(Rcpp)
 library(Matrix)
 library(psych)
 library(gtools)
+source("initialization.r")
 #e step
 e_cfa3pl<-'
 // [[Rcpp::depends(RcppArmadillo)]]
@@ -361,7 +362,11 @@ saem_3PLCFA <- function(u, domain, indic,samp,forgetrate,mu_b,sigma2_b,Alpha,
   #gic
   lbound=lb3pl(u,xi,new_s,person,new_a, new_c, Sigma, new_b, SIGMA, MU,Alpha, Beta, mu_b, sigma2_b)
   gic=log(log(person))*log(person)*sum(Q_mat+item) - 2*lbound
+  #AIC, BIC
+  bic = log(person)*sum(Q_mat+item) - 2*lbound
+  aic = 2*sum(Q_mat+item) -2*lbound
   return(list(ra=new_a,rb=new_b,rc=new_c,rs = new_s,
               reta = eta,reps=xi,rsigma = rsigma,mu_i = MU,sig_i = SIGMA,n=n,
-              Q_mat=Q_mat,GIC=gic))
+              Q_mat=Q_mat,GIC=gic,AIC=aic,
+              BIC=bic))
 }

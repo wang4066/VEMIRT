@@ -4,8 +4,12 @@
 # Inputs:
 # u: response matrix, a N by J numerical matrix
 # domain: K, numerical value of number of latent dimension
+# indic: factor loading indicator matrix, a J by K numerical matrix, 
+#       reflecting each item loads on which domain
+# non_pen: the index of an item which load on all domains but satisfies 
+#          with constraint 2
 #################################################
-##### Outputs a list of initialized parameters                                                             
+##### Outputs a list of updated parameters                                                             
 ##### ra: item discrimination parameters, a J by K matrix                                                           
 ##### rb: item difficulty parameters, vector of length J
 ##### reta: variational parameters(\eta(\xi) in the paper), a N by J matrix  
@@ -15,7 +19,7 @@
 ##### sig_i: covariance matrix for each person, a K by K by N array
 ##### n: the number of iterations
 ##### Q_mat: Q-matrix to indicate the loading structure,  a J by K matrix
-##### GIC: numerical value of GIC
+##### GIC,AIC,BIC : model fit index
 ##### lbd: numerical value of penalty parameter lambda
 ##### id: numerical value of the position of lambda  
 ##################################################
@@ -33,18 +37,22 @@ using namespace Rcpp;
 using namespace arma;
 // [[Rcpp::export]]
 arma::mat nalc22pl(const arma::mat&u,const int& domain,
+const arma::mat& a,const arma::vec& nopenalty_col,
+const arma::vec& lastone,
 const int& person, const arma::mat& eta,const arma::vec& new_b,const arma::cube& SIGMA, const arma::mat& MU){
-arma::mat new_a=zeros(domain,domain);
-for(int j=0; j<domain; ++j){
+arma::mat new_a=a;
+for(int j=0; j<nopenalty_col.n_elem; ++j){
+int k=nopenalty_col(j)-1;
+int l=lastone(j)-1;
 double a_nu= 0;
 double a_de= 0;
 for(int i=0; i<person; ++i){
-double sigma=SIGMA(j,j,i);
-double mu=MU(j,i);
-a_de=a_de+eta(i,j)*sigma+eta(i,j)*(mu*mu);
-a_nu=a_nu+(u(i,j)-0.5+2*new_b(j)*eta(i,j))*mu;
+double sigma=SIGMA(l,l,i);
+double mu=MU(l,i);
+a_de=a_de+eta(i,k)*sigma+eta(i,k)*(mu*mu);
+a_nu=a_nu+(u(i,k)-0.5+2*new_b(k)*eta(i,k))*mu;
 }
-new_a(j,j)=1/a_de*a_nu/2;
+new_a(k,l)=1/a_de*a_nu/2;
 }
 return new_a;
 }
@@ -58,13 +66,17 @@ pa_lc22pl<-'
 using namespace Rcpp;
 using namespace arma;
 // [[Rcpp::export]]
-arma::mat palc22pl(const arma::mat&u,const arma::mat& a,const double& lbd,
+arma::mat palc22pl(const arma::mat&u,const arma::mat& a,
+const arma::vec& nopenalty_col,
+const arma::vec& lastone,const double& lbd,
 const int& person, const arma::mat& eta,const arma::vec& new_b,const arma::cube& SIGMA, const arma::mat& MU){
 arma::mat new_a1=a;
-int domain=new_a1.n_rows;
-for(int j=0; j<domain; ++j){
-arma::uvec A=regspace<uvec>(0, 1,j-1);
-arma::uvec B=regspace<uvec>(j+1, 1, domain-1);
+int domain=new_a1.n_cols;
+for(int j=0; j<nopenalty_col.n_elem; ++j){
+int n=nopenalty_col(j)-1;
+int l=lastone(j)-1;
+arma::uvec A=regspace<uvec>(0, 1,l-1);
+arma::uvec B=regspace<uvec>(l+1, 1, domain-1);
 arma::uvec sdf=join_vert(A,B);
 for(int k=0; k<sdf.n_elem; ++k){
 double delta = 0; 
@@ -78,17 +90,17 @@ arma::uvec A1=regspace<uvec>(0, 1,m-1);
 arma::uvec B1=regspace<uvec>(m+1, 1, domain-1);
 arma::uvec ex_k=join_vert(A1,B1);
 arma::uvec id(1);
-id.at(0)=j;
+id.at(0)=n;
 arma::uvec id2(1);
 id2.at(0)=m;
-delta = delta + (u(i,j)-0.5)*mu(m)+2*new_b(j)*eta(i,j)*mu(m)-2*eta(i,j)*dot(trans(new_a1.submat(id,ex_k)),sigmumu.submat(ex_k,id2));
-deriv2 = deriv2 + 2*eta(i,j)*sigmumu(m,m);
+delta = delta + (u(i,n)-0.5)*mu(m)+2*new_b(n)*eta(i,n)*mu(m)-2*eta(i,n)*dot(trans(new_a1.submat(id,ex_k)),sigmumu.submat(ex_k,id2));
+deriv2 = deriv2 + 2*eta(i,n)*sigmumu(m,m);
 }
 if(abs(delta)>lbd){
 double S=sign(delta)*(abs(delta) - lbd);
-new_a1(j,m) = S/deriv2;
+new_a1(n,m) = S/deriv2;
 }else{
-new_a1(j,m) = 0;
+new_a1(n,m) = 0;
 }
 }
 }
@@ -105,8 +117,9 @@ using namespace Rcpp;
 using namespace arma;
 // [[Rcpp::export]]
 arma::mat palc22pl1(const arma::mat&u,const int& domain,const int& item,const int& person,const double& lbd, const arma::mat& eta, arma::mat& new_a,
-const arma::vec& new_b,const arma::cube& SIGMA, const arma::mat& MU){
-for(int j=domain; j<item; ++j){
+const arma::vec& new_b,const arma::cube& SIGMA, const arma::mat& MU,const arma::vec& pc){
+for(int n=0; n<pc.n_elem; ++n){
+int j=pc(n)-1;
 for(int k=0; k<domain; ++k){
 double delta = 0; 
 double deriv2 = 0;
@@ -138,7 +151,8 @@ return new_a;
 sourceCpp(code=pa_lc22pl1)
 
 #lasso with constraint 2 function
-vem_2PLEFA_L1_const2 <- function(u,new_a,new_b,eta,xi,Sigma,  domain,lbd,updateProgress=NULL) {
+vem_2PLEFA_L1_const2 <- function(u,new_a,new_b,eta,xi,Sigma,  domain,lbd,
+                                 indic,nopenalty_col,updateProgress=NULL) {
   person=dim(u)[1]
   item=dim(u)[2]
   converge = 0
@@ -175,14 +189,17 @@ vem_2PLEFA_L1_const2 <- function(u,new_a,new_b,eta,xi,Sigma,  domain,lbd,updateP
     
     par_a=new_a
     #update a
-    new_a1=nalc22pl(u, domain, person, eta, new_b, SIGMA, MU)
-    new_a1[upper.tri(new_a1)]<-new_a[upper.tri(new_a)]
-    new_a1[lower.tri(new_a1)]<-new_a[1:domain,1:domain][lower.tri(new_a[1:domain,1:domain])]
+    #find the last one for each item by using indicator matrix
+    lastone=apply(indic[nopenalty_col,], 1, function(x) tail(which(x!=0),1))
+    new_a=nalc22pl(u, domain,new_a,nopenalty_col,lastone, person, eta, new_b, SIGMA, MU)
     #L1-penalty: off-diagnoal
-    new_a1=palc22pl(u, new_a1, lbd, person, eta, new_b, SIGMA, MU)
-    new_a1=rbind(new_a1,new_a[-(1:domain),])
+    new_a=palc22pl(u, new_a,nopenalty_col,lastone, lbd, person, eta, new_b, SIGMA, MU)
+    #upper-tiangular should be zero
+    new_a=replace(new_a,indic==0,0)
     #domain+1:item
-    new_a=palc22pl1(u, domain, item, person, lbd, eta, new_a1, new_b, SIGMA, MU)
+    #find penaly columns
+    pc=setdiff(1:item,nopenalty_col)
+    new_a=palc22pl1(u, domain, item, person, lbd, eta, new_a, new_b, SIGMA, MU,pc)
     #new_a=replace(new_a,new_a< 0,0)
     #par_a=new_a2
     if (norm(as.vector(new_a)-as.vector(par_a),type="2")+norm(new_b-par_b,type="2")+
@@ -199,19 +216,23 @@ vem_2PLEFA_L1_const2 <- function(u,new_a,new_b,eta,xi,Sigma,  domain,lbd,updateP
   }
   new_a=replace(new_a,abs(new_a)< 0.001,0)
   Q_mat = (new_a != 0)*1
+  #gic
+  lbound=lb2pl(u,xi,Sigma,new_a,new_b,SIGMA,MU)
+  gic=log(log(person))*log(person)*sum(Q_mat+item) - 2*lbound
+  #AIC, BIC
+  bic = log(person)*sum(Q_mat+item) - 2*lbound
+  aic = 2*sum(Q_mat+item) -2*lbound
   return(list(ra=new_a,rb=new_b,reta = eta,reps=xi,rsigma = Sigma,mu_i = MU,sig_i = SIGMA,n=n,
-              Q_mat=Q_mat,is_singular=is_singular))
+              Q_mat=Q_mat,GIC=gic,AIC=aic,
+              BIC=bic))
 }
 
 #main function: choose optimal lambda
-vem_2PLEFA_L1_const2_all<-function(u,domain,updateProgress=NULL){
+vem_2PLEFA_L1_const2_all<-function(u,domain,indic,non_pen,updateProgress=NULL){
   lbd=seq(2,20,2)
   person=dim(u)[1]
   item=dim(u)[2]
-  #create a indicator matrix satisfying the constraint 2
-  a1=diag(domain)
-  a1[lower.tri(a1,diag=FALSE)]=1
-  indic=rbind(a1,matrix(1,nrow=(dim(u)[2]-domain),ncol=domain))
+  nopenalty_col=c(which(rowSums(indic)<domain),non_pen)
   #initialization
   initial=init(u,domain,indic)
   new_a = initial[[1]]
@@ -226,7 +247,7 @@ vem_2PLEFA_L1_const2_all<-function(u,domain,updateProgress=NULL){
       text <- paste0("j=:", j)
       updateProgress(detail = text)
     }
-    r0=vem_2PLEFA_L1_const2(u,new_a,new_b,eta,xi,Sigma,  domain,lbd[j],updateProgress=NULL) 
+    r0=vem_2PLEFA_L1_const2(u,new_a,new_b,eta,xi,Sigma,  domain,lbd[j],indic,nopenalty_col,updateProgress=NULL) 
     rl [[j]]=vem_2PLCFA(u,domain, r0$Q_mat,updateProgress=NULL)
     lbound=lb2pl(u,rl[[j]]$reps,rl[[j]]$rsigma,rl[[j]]$ra,
                  rl[[j]]$rb,rl[[j]]$sig_i,rl[[j]]$mu_i)
@@ -244,7 +265,7 @@ vem_2PLEFA_L1_const2_all<-function(u,domain,updateProgress=NULL){
     rl<-vector("list",length(lbd))
     gic<-NULL
     for(j in 1:length(lbd)){
-      r0=vem_2PLEFA_L1_const2(u,new_a,new_b,eta,xi,Sigma,  domain,lbd[j],updateProgress=NULL) 
+      r0=vem_2PLEFA_L1_const2(u,new_a,new_b,eta,xi,Sigma,  domain,lbd[j],indic,nopenalty_col,updateProgress=NULL) 
       rl [[j]]=vem_2PLCFA(u,domain, r0$Q_mat,updateProgress=NULL)
       lbound=lb2pl(u,rl[[j]]$reps,rl[[j]]$rsigma,rl[[j]]$ra,
                    rl[[j]]$rb,rl[[j]]$sig_i,rl[[j]]$mu_i)
@@ -260,7 +281,7 @@ vem_2PLEFA_L1_const2_all<-function(u,domain,updateProgress=NULL){
     rl<-vector("list",length(lbd))
     gic<-NULL
     for(j in 1:length(lbd)){
-      r0=vem_2PLEFA_L1_const2(u,new_a,new_b,eta,xi,Sigma,  domain,lbd[j],updateProgress=NULL) 
+      r0=vem_2PLEFA_L1_const2(u,new_a,new_b,eta,xi,Sigma,  domain,lbd[j],indic,nopenalty_col,updateProgress=NULL) 
       rl [[j]]=vem_2PLCFA(u,domain, r0$Q_mat,updateProgress=NULL)
       lbound=lb2pl(u,rl[[j]]$reps,rl[[j]]$rsigma,rl[[j]]$ra,
                    rl[[j]]$rb,rl[[j]]$sig_i,rl[[j]]$mu_i)

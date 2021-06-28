@@ -16,7 +16,7 @@
 ##### n: the number of iterations
 ##### rk: factor loadings after the transformation, a J by K matrix
 ##### Q_mat: Q-matrix to indicate the loading structure,  a J by K matrix
-##### GIC: numerical value of GIC
+##### GIC,AIC,BIC : model fit index
 ##################################################
 
 library(Rcpp)
@@ -34,24 +34,24 @@ List eefa2(const arma::mat&u, const int& domain, const int& person,
 const int& item, const arma::mat& eta, const arma::mat& new_a,const arma::vec& new_b){
 arma::mat MU=mat(domain,person,fill::zeros);
 arma::cube SIGMA=zeros(domain,domain,person);
-arma::mat Spart=mat(domain,domain,fill::zeros);
 arma::mat xi=mat(person,item,fill::zeros);
 for(int i=0; i<person; ++i){
 arma::mat sigma_part=arma::mat(domain,domain,arma::fill::zeros);
 //mu_part.zeros();
 arma::vec mu_part= arma::zeros(domain);
 for(int j=0; j<item; ++j){
+if(NumericVector::is_na(eta(i,j))){
+continue;}
 sigma_part=sigma_part+eta(i,j)*trans(new_a.row(j))*new_a.row(j);
 mu_part=mu_part+trans((2*eta(i,j)*new_b(j)+u(i,j)-0.5)*new_a.row(j));
 }
 arma::mat Sigma= eye(domain,domain);
-arma::mat sigmahat=solve((Sigma+2*sigma_part),eye(domain,domain));
+arma::mat sigmahat=solve((solve(Sigma,eye(domain,domain))+2*sigma_part),eye(domain,domain));
 arma::vec muhat=sigmahat*mu_part;
 SIGMA.slice(i)=sigmahat;
 MU.col(i)=muhat;
 arma::mat apro=new_a*(sigmahat+muhat*trans(muhat))*trans(new_a);
 xi.row(i)=trans(sqrt(square(new_b)-2*new_b%(new_a*muhat)+apro.diag()));
-//Spart=Spart+sigmahat+muhat*trans(muhat);
 }
 return List::create(Named("SIGMA") = SIGMA,
 Named("MU") = MU,Named("xi") = xi);
@@ -75,6 +75,8 @@ arma::mat a_de= zeros(domain,domain);
 for(int i=0; i<person; ++i){
 arma::mat sigma=SIGMA.slice(i);
 arma::vec mu=MU.col(i);
+if(NumericVector::is_na(eta(i,j))){
+continue;}
 a_de=a_de+eta(i,j)*sigma+eta(i,j)*(mu*trans(mu));
 a_nu=a_nu+(u(i,j)-0.5+2*new_b(j)*eta(i,j))*mu;
 }
@@ -114,6 +116,8 @@ double sum = 0;
 double sum2 = 0;
 for(int i=0; i<person; ++i){
 for(int j=0; j<item; ++j){
+if(NumericVector::is_na(eta(i,j))){
+continue;}
 sum = sum + log(exp(xi(i,j))/(1+exp(xi(i,j))))+(0.5-u(i,j))*new_b(j)+(u(i,j)-0.5)*as_scalar(new_a.row(j)*MU.col(i));
 sum = sum - 0.5*xi(i,j);
 double apro=as_scalar(new_a.row(j)*(SIGMA.slice(i)+MU.col(i)*trans(MU.col(i)))*trans(new_a.row(j)));
@@ -132,20 +136,22 @@ vem_2PLEFA <- function(u, domain,updateProgress=NULL) {
   person=dim(u)[1]
   item=dim(u)[2]
   converge = 1
-  
   #initialization
   r=identify(u)
   person=dim(u)[1]
   r[r>0.9]=0.9
   r[r<0]=abs(r[r<0][1])
   new_a=t(rep(1,domain)%o%(r/sqrt(1-r^2)))
-  new_b=-qnorm(colSums(u)/person,0,1)/r
+  new_a=replace(new_a,new_a>4,4)
+  new_b=-qnorm(colSums(u,na.rm=T)/person,0,1)/r
+  new_b[new_b>4]=4
+  new_b[new_b<(-4)]=-4
   Sigma = diag(domain)
   theta=matrix(rnorm(person*domain,0,1),nrow=person)
   #person*item
   xi=array(1,person)%*%t(new_b)-theta%*%t(new_a)
   eta=(exp(xi)/(1+exp(xi))-0.5)/(2*xi)
-  
+  eta[is.na(u)]=NA
   
   # initial=init(u,domain,indic)
   MU=matrix(0,nrow=domain,ncol=person)
@@ -165,6 +171,7 @@ vem_2PLEFA <- function(u, domain,updateProgress=NULL) {
     #update mu and sigma for each person
     rs1<-eefa2(u,domain, person, item, eta, new_a, new_b)
     xi=rs1$xi
+    xi[is.na(u)]=NA
     SIGMA=rs1$SIGMA
     MU=rs1$MU
     eta=(exp(xi)/(1+exp(xi))-0.5)/(2*xi)
@@ -176,7 +183,7 @@ vem_2PLEFA <- function(u, domain,updateProgress=NULL) {
     #update b
     par_b=new_b
     b_part = t(new_a%*%MU)
-    new_b=colSums(0.5-u+2*eta*b_part)/colSums(2*eta)
+    new_b=colSums(0.5-u+2*eta*b_part,na.rm = T)/colSums(2*eta,na.rm = T)
     par_a=new_a
     #update a
     new_a=aefa2(u,domain,person,item,eta,new_b,SIGMA,MU)
@@ -206,5 +213,10 @@ vem_2PLEFA <- function(u, domain,updateProgress=NULL) {
   #gic
   lbound=lb2pl(u,xi,Sigma,new_a,new_b,SIGMA,MU)
   gic=log(log(person))*log(person)*sum(Q_mat+item) - 2*lbound
-  return(list(ra=new_a,rb=new_b,reta = eta,reps=xi,rsigma = Sigma,mu_i = MU,sig_i = SIGMA,n=n,rk=rk,Q_mat=Q_mat,GIC=gic))
+  #AIC, BIC
+  bic = log(person)*sum(Q_mat+item) - 2*lbound
+  aic = 2*sum(Q_mat+item) -2*lbound
+  return(list(ra=new_a,rb=new_b,reta = eta,reps=xi,rsigma = Sigma,mu_i = MU,
+              sig_i = SIGMA,n=n,rk=rk,Q_mat=Q_mat,GIC=gic,AIC=aic,
+              BIC=bic))
 }
